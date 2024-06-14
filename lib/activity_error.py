@@ -1,13 +1,13 @@
-from typing import Type, Optional, TypeVar, Callable, Union
+from typing import TypeVar, Any
 
-TInput = TypeVar('TInput', bound=any)
-TOutput = TypeVar('TOutput', bound=any)
+TInput = TypeVar('TInput', bound=Any)
+TOutput = TypeVar('TOutput', bound=Any)
 
 
-class ActivityError:
-    code: str
+class ActivityError(Exception):
+    key: str
     message: str
 
-    def __init__(self, code: str, message: str):
-        self.code = code
+    def __init__(self, key: str, message: str):
+        self.key = key
         self.message = message
