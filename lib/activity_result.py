@@ -1,25 +1,25 @@
-from typing import Optional, TypeVar,  Union, Generic
+from typing import Optional, TypeVar, Union, Generic, Any, Dict
 from lib.activity_error import ActivityError
 
-TInput = TypeVar('TInput', bound=any)
-TOutput = TypeVar('TOutput', bound=any)
+TInput = TypeVar('TInput', bound=Any)
+TOutput = TypeVar('TOutput', bound=Any)
+TCtx = Dict[str, Any]
 
 
 class ActivityResult(Generic[TOutput]):
     ok: bool
     output: Optional[TOutput]
     errors: list[ActivityError]
-    context: dict[str, any]
+    ctx: TCtx
 
     def __init__(self, ok: bool,
-                 output: Optional[any] = None,
+                 output: Optional[Any] = None,
                  error: Union[str, Exception] = None,
-                 context: dict[str, any] = {},
                  **kwargs):
         self.ok = ok
         self.output = output
-        self.context = context
         self.error = self.parse_error(error)
+        self.ctx = kwargs
 
     @staticmethod
     def ok(output: TOutput, **kwargs) -> 'ActivityResult':

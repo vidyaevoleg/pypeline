@@ -1,40 +1,48 @@
 import inspect
 import traceback
-from typing import Optional, TypeVar, Generic, Dict, Any, Union, Type, overload, Callable
-
-from pydantic import BaseModel, ValidationError
-
+from typing import Optional, TypeVar, Generic, Dict, Any, Union, overload, Callable
+from pydantic import BaseModel
+from lib.activity_error import ActivityError
 from lib.activity_result import ActivityResult
 
 TInput = TypeVar('TInput', bound=Union[BaseModel, dict])
-TOutput = TypeVar('TOutput')
+TOutput = TypeVar('TOutput', bound=Any)
+TCtx = Dict[str, Any]
 
 
 class Activity(Generic[TInput, TOutput]):
     input: TInput
-    ctx: Dict[str, Any] = {}
-    result: ActivityResult
 
     _id: str = None
     _ok: bool = True
+    _ctx: TCtx = {}
     _error: Optional[Exception] = None
     _output: Optional[TOutput] = None
-    _callback: Optional[Callable[[any], any]] = None
+    _callback: Optional[Callable[[Any], Any]] = None
+    _expected_input_type: Optional[type] = None
 
-    def __init__(self, input, callback: Optional[Callable[[any], any]] = None, **kwargs):
-        self.ctx = kwargs
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, '__orig_bases__'):
+            for base in cls.__orig_bases__:
+                if hasattr(base, '__args__') and base.__args__:
+                    cls._expected_input_type = base.__args__[0]
+                    break
+
+    def __init__(self, input: Optional[Any] = None, callback: Optional[Callable[[Any], Any]] = None, **kwargs):
         self.input = input
+        self._ctx = kwargs
         self._callback = callback
         self._id = callback.__name__ if callback else self.__class__.__name__
 
     def __call__(self, **ctx) -> 'ActivityResult':
         activity_name = self.__class__.__name__
-        activity_context = {**self.ctx, **ctx}
+        activity_context = {**self._ctx, **ctx}
 
         print(f'Running activity: {activity_name}')
 
         try:
-            self.input = self.__build_input()
+            self.input = self.__coerce_input()
             method = self._callback if self._callback else getattr(self, 'call')
             if len(inspect.signature(method).parameters) > 0:
                 # The call method accepts keyword arguments
@@ -62,37 +70,39 @@ class Activity(Generic[TInput, TOutput]):
     @property
     def result(self) -> ActivityResult[TOutput]:
         if self._ok:
-            return ActivityResult.ok(self._output, **self.ctx)
+            return ActivityResult.ok(self._output, **self._ctx)
         else:
-            return ActivityResult.fail(self._error, **self.ctx)
+            return ActivityResult.fail(self._error, **self._ctx)
 
     @property
     def output(self) -> Optional[TOutput]:
         return self._output
 
-    def __build_input(self) -> BaseModel:
-        # Getting the first type argument assuming that it's a pydantic class
-        try:
-            expected_input_type = self.__orig_bases__[0].__args__[0]
-        except Exception as _e:
-            raise ValueError('Generic input type was not provided')
+    @property
+    def ctx(self) -> TCtx:
+        return self._ctx
 
-        if issubclass(expected_input_type, BaseModel):
+    def __coerce_input(self) -> Optional[BaseModel]:
+        # Getting the first type argument assuming that it's a pydantic class
+        if self._expected_input_type is None:
+            return
+
+        if issubclass(self._expected_input_type, BaseModel):
             if isinstance(self.input, dict):
                 # an exception is usually thrown hee if the input is not valid
-                return expected_input_type(**self.input)
+                return self._expected_input_type(**self.input)
             elif isinstance(self.input, BaseModel):
                 return self.input
             else:
                 raise ValueError('Input must be a dict or a pydantic model')
         else:
             # TODO replace with issubclass
-            if self.input.__class__ == expected_input_type:
+            if self.input.__class__ == self._expected_input_type:
                 return self.input
             else:
-                raise ValueError(f'Input must be of type {expected_input_type.__name__}')
+                raise ValueError(f'Input must be of type {self._expected_input_type.__name__}')
 
-    def _fail(self, reason: Union[ActivityResult, Exception], info: Optional[str] = None):
+    def _fail(self, reason: Union[ActivityResult, Exception, str], info: Optional[str] = None):
         self._ok = False
         self._output = None
 
@@ -101,9 +111,10 @@ class Activity(Generic[TInput, TOutput]):
 
         if isinstance(reason, ActivityResult):
             self._error = reason.error
-        else:
-            error = traceback.format_exc(reason)
-            print(error)
+        elif isinstance(reason, str):
+            self._error = ActivityError('base', reason)
+        elif isinstance(reason, Exception):
+            print(traceback.format_exc())
             self._error = reason
 
     def _succeed(self, output: Union[ActivityResult, TOutput]):
@@ -111,5 +122,7 @@ class Activity(Generic[TInput, TOutput]):
         self._error = None
         if isinstance(output, ActivityResult):
             self._output = output.output
+            self._ctx = {**self._ctx, **output.ctx}
         else:
             self._output = output
+
